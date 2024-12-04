@@ -2,7 +2,6 @@ import os
 import requests
 from datetime import datetime, timedelta
 from typing import List, Dict
-import openai
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
@@ -20,27 +19,12 @@ SMTP_PASSWORD = "your_password"
 OPENAI_API_KEY = "your_openai_api_key"
 openai.api_key = OPENAI_API_KEY
 
-# Predefined cover letter templates
-TEMPLATES = {
-    "tech": "As an experienced professional in technology, I have a strong background in {skills}. I am excited about the opportunity to work at {company} and contribute to {job_title}.",
-    "finance": "My expertise in financial analysis and strategic planning makes me an ideal candidate for the {job_title} role at {company}.",
-    "healthcare": "With a solid background in healthcare and patient management, I am eager to bring my skills to {company} as a {job_title}.",
-    "education": "As a passionate educator with a commitment to learning, I am thrilled about the opportunity to join {company} as a {job_title}.",
-    "marketing": "With a creative mindset and a strong understanding of marketing strategies, I am excited to bring value to {company} in the role of {job_title}.",
-    "default": "I am thrilled to apply for the position of {job_title} at {company}. My skills and experiences align closely with the requirements of this role."
-}
-
-# Cover letter formats
-FORMATS = {
-    "formal": "This cover letter will follow a professional and structured tone.",
-    "casual": "This cover letter will use a friendly and approachable tone.",
-    "creative": "This cover letter will incorporate a unique and innovative style."
-}
-
-def parse_resume(file_path: str) -> str:
-    """Parse content from the resume file."""
+def parse_resume(file_path: str) -> List[str]:
+    """Parse keywords from resume file."""
     with open(file_path, 'r') as file:
-        return file.read()
+        content = file.read()
+    keywords = content.lower().split()  # Extract keywords for filtering
+    return keywords
 
 def search_jobs(keywords: List[str], location: str = "", portals: List[str] = ["Indeed", "LinkedIn"]) -> List[Dict]:
     """Search jobs across portals."""
@@ -56,7 +40,7 @@ def search_jobs(keywords: List[str], location: str = "", portals: List[str] = ["
 
 def is_job_active(job: Dict) -> bool:
     """Check if the job is still active and not expired."""
-    expiry_date = job.get("expiry_date")
+    expiry_date = job.get("expiry_date")  # Assuming job API provides expiry_date
     if expiry_date:
         expiry_date = datetime.strptime(expiry_date, "%Y-%m-%d")
         return expiry_date >= datetime.now()
@@ -84,22 +68,16 @@ def filter_jobs(jobs: List[Dict], keywords: List[str], min_salary: int = 0, remo
     ]
     return sort_by_expiry(relevant_jobs)
 
-def generate_cover_letter_with_gpt(resume: str, job_title: str, company: str, job_description: str, user_input: str, industry: str, format_style: str) -> str:
+
+
+def generate_cover_letter_with_gpt(resume: str, job_title: str, company: str, job_description: str, user_input: str) -> str:
     """Generate a personalized cover letter using OpenAI GPT."""
-    template = TEMPLATES.get(industry.lower(), TEMPLATES["default"])
-    format_description = FORMATS.get(format_style.lower(), FORMATS["formal"])
     prompt = f"""
-    Write a {format_style} cover letter based on the following details:
-    Format: {format_description}
-    Template: {template}
-    Candidate's resume: {resume[:300]}...
-    Job title: {job_title}
-    Company: {company}
+    Write a professional and personalized cover letter for the position of {job_title} at {company}.
+    The candidate's resume contains the following details: {resume[:300]}...
     Job description: {job_description[:300]}...
     Additional details provided by the user: {user_input}
-    """
-    
-    try:
+  try:
         response = openai.Completion.create(
             engine="text-davinci-003",  # GPT model
             prompt=prompt,
@@ -109,8 +87,30 @@ def generate_cover_letter_with_gpt(resume: str, job_title: str, company: str, jo
         return response['choices'][0]['text'].strip()
     except Exception as e:
         print(f"Error generating cover letter: {e}")
-        return "Error generating cover letter."
+        return "Error generating cover letter." 
 
+
+        
+def generate_cover_letter(resume: str, job_description: str, user_input: str) -> str:
+    """Generate a personalized cover letter."""
+    cover_letter = f"""
+    Dear Hiring Manager,
+
+    I am excited to apply for the position of {job_description['title']} at {job_description['company']}. With my background in {', '.join(resume.split()[:10])}, I am confident that I can contribute effectively to your team.
+
+    {user_input}  # Custom user-provided details to personalize the letter further.
+
+    My skills and experiences align perfectly with the requirements of this role. I look forward to the opportunity to discuss how I can bring value to your company.
+
+    Thank you for considering my application.
+
+    Best regards,
+    [Your Name]
+    """
+    return cover_letter
+
+
+    
 def display_jobs(jobs: List[Dict]):
     """Display jobs with application options."""
     for i, job in enumerate(jobs, start=1):
@@ -123,14 +123,39 @@ def display_jobs(jobs: List[Dict]):
         print(f"   Link: {job['url']}")
         print("   [1] Automate Application  [2] Manual Application")
 
-def automate_application(job_url: str, resume_path: str, cover_letter: str):
+def automate_application(job_url: str, resume_path: str):
     """Automate job application if portal supports API."""
     with open(resume_path, 'rb') as resume_file:
-        response = requests.post(f"{job_url}/apply", files={
-            'resume': resume_file,
-            'cover_letter': ('cover_letter.txt', cover_letter)
-        })
+        response = requests.post(f"{job_url}/apply", files={'resume': resume_file})
     return response.status_code == 200
+
+def send_email_notification(jobs: List[Dict], recipient_email: str):
+    """Send email notification for soon-to-expire jobs."""
+    if not jobs:
+        return
+
+    subject = "Jobs Expiring Soon!"
+    body = "Here are the jobs that are expiring soon:\n\n"
+    for job in jobs:
+        body += (f"{job['title']} at {job['company']}\n"
+                 f"Location: {job['location']}\n"
+                 f"Expires on: {job.get('expiry_date', 'N/A')}\n"
+                 f"Link: {job['url']}\n\n")
+    
+    msg = MIMEMultipart()
+    msg['From'] = SMTP_EMAIL
+    msg['To'] = recipient_email
+    msg['Subject'] = subject
+    msg.attach(MIMEText(body, 'plain'))
+
+    try:
+        with smtplib.SMTP(SMTP_SERVER, SMTP_PORT) as server:
+            server.starttls()
+            server.login(SMTP_EMAIL, SMTP_PASSWORD)
+            server.send_message(msg)
+        print("Notification email sent successfully!")
+    except Exception as e:
+        print(f"Failed to send email: {e}")
 
 def main():
     # Step 1: Upload resume
@@ -144,35 +169,48 @@ def main():
     preferred_titles = input("Enter preferred job titles (comma-separated): ").split(",")
     min_salary = int(input("Enter minimum salary (optional, default 0): ") or 0)
     remote_only = input("Search for remote jobs only? (yes/no): ").lower() == "yes"
-    additional_input = input("Enter any specific details to include in the cover letter: ")
-    industry = input("Enter the industry for the job (e.g., tech, finance, healthcare, education, marketing): ").lower()
-    format_style = input("Choose cover letter format (formal, casual, creative): ").lower()
+    email_notifications = input("Receive email notifications for soon-to-expire jobs? (yes/no): ").lower() == "yes"
+    recipient_email = input("Enter your email for notifications (if applicable): ") if email_notifications else None
 
-    resume_content = parse_resume(resume_path)
+    resume_keywords = parse_resume(resume_path)
 
     # Step 3: Search and filter jobs
-    all_jobs = search_jobs(preferred_titles, location)
-    matched_jobs = filter_jobs(all_jobs, preferred_titles, min_salary, remote_only)
+    all_jobs = search_jobs(resume_keywords + preferred_titles, location)
+    matched_jobs = filter_jobs(all_jobs, resume_keywords + preferred_titles, min_salary, remote_only)
 
     # Step 4: Save and display jobs
     with open(SAVE_PATH, "w") as file:
         file.write(str(matched_jobs))
     display_jobs(matched_jobs)
 
-    # Step 5: Apply to jobs
+    # Step 5: Email notifications for soon-to-expire jobs
+    if email_notifications:
+        soon_to_expire_jobs = [job for job in matched_jobs if job.get('expiry_date') and 
+                               datetime.strptime(job['expiry_date'], "%Y-%m-%d") <= datetime.now() + timedelta(days=3)]
+        send_email_notification(soon_to_expire_jobs, recipient_email)
+
+    # Step 6: Apply to jobs
     if matched_jobs:
         job_choice = int(input("Enter job number to apply: "))
+        apply_option = int(input("Enter [1] for Automate or [2] for Manual: "))
         selected_job = matched_jobs[job_choice - 1]
 
-        # Generate Cover Letter
-        cover_letter = generate_cover_letter_with_gpt(
+        if apply_option == 1:
+            success = automate_application(selected_job['url'], resume_path)
+            print("Application Successful!" if success else "Application Failed!")
+        elif apply_option == 2:
+            print(f"Apply manually at: {selected_job['url']}")
+    else:
+        print("No jobs found matching your criteria.")
+
+if __name__ == "__main__":
+    main()
+    
+# step 7 Generate Cover Letter
+        cover_letter = generate_cover_letter(
             resume_content, 
-            selected_job['title'], 
-            selected_job['company'], 
-            selected_job.get('description', ""), 
-            additional_input,
-            industry,
-            format_style
+            selected_job, 
+            additional_input
         )
         print("\nGenerated Cover Letter:\n")
         print(cover_letter)
