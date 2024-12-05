@@ -69,45 +69,209 @@ def filter_jobs(jobs: List[Dict], keywords: List[str], min_salary: int = 0, remo
     return sort_by_expiry(relevant_jobs)
 
 
-
-def generate_cover_letter_with_gpt(resume: str, job_title: str, company: str, job_description: str, user_input: str) -> str:
-    """Generate a personalized cover letter using OpenAI GPT."""
-    prompt = f"""
-    Write a professional and personalized cover letter for the position of {job_title} at {company}.
-    The candidate's resume contains the following details: {resume[:300]}...
-    Job description: {job_description[:300]}...
-    Additional details provided by the user: {user_input}
-  try:
-        response = openai.Completion.create(
-            engine="text-davinci-003",  # GPT model
-            prompt=prompt,
-            max_tokens=300,
-            temperature=0.7
-        )
-        return response['choices'][0]['text'].strip()
-    except Exception as e:
-        print(f"Error generating cover letter: {e}")
-        return "Error generating cover letter." 
+import openai
+import streamlit as st
+from io import BytesIO
+from docx import Document
+from docx.shared import Pt
+from docx.enum.text import WD_PARAGRAPH_ALIGNMENT
+from googleapiclient.discovery import build
+from googleapiclient.http import MediaFileUpload
+from google_auth_oauthlib.flow import InstalledAppFlow
+import dropbox
 
 
-        
-def generate_cover_letter(resume: str, job_description: str, user_input: str) -> str:
-    """Generate a personalized cover letter."""
-    cover_letter = f"""
-    Dear Hiring Manager,
+# OpenAI API Key (Replace with your key)
+openai.api_key = "your_openai_api_key"
 
-    I am excited to apply for the position of {job_description['title']} at {job_description['company']}. With my background in {', '.join(resume.split()[:10])}, I am confident that I can contribute effectively to your team.
 
-    {user_input}  # Custom user-provided details to personalize the letter further.
-
-    My skills and experiences align perfectly with the requirements of this role. I look forward to the opportunity to discuss how I can bring value to your company.
-
-    Thank you for considering my application.
-
-    Best regards,
-    [Your Name]
+def generate_cover_letter(
+    resume: str,
+    job_description: dict,
+    user_input: str,
+    use_gpt: bool = False,
+    salutation: str = "Dear Hiring Manager",
+    closing: str = "Best regards",
+) -> str:
     """
-    return cover_letter
+    Generate a personalized cover letter, either manually or using GPT.
+    """
+    # Validate job_description
+    title = job_description.get("title", "the position")
+    company = job_description.get("company", "your company")
+    
+    if use_gpt:
+        # Use OpenAI GPT to generate the cover letter
+        prompt = f"""
+        Write a professional and personalized cover letter for the position of {title} at {company}.
+        The candidate's resume contains the following details: {resume[:300]}...
+        Job description: {job_description.get('description', '')[:300]}...
+        Additional details provided by the user: {user_input}
+        """
+        try:
+            response = openai.Completion.create(
+                engine="text-davinci-003",  # GPT model
+                prompt=prompt,
+                max_tokens=300,
+                temperature=0.7,
+            )
+            return response['choices'][0]['text'].strip()
+        except Exception as e:
+            return f"Error generating cover letter using GPT: {e}"
+    else:
+        # Manual method using a template
+        resume_excerpt = " ".join(resume.split()[:20]) if resume else "my relevant experience and skills"
+        user_input = user_input.strip()  # Clean user input
+        cover_letter_template = f"""
+        {salutation},
+
+        I am excited to apply for the position of {title} at {company}. With my background in {resume_excerpt}, 
+        I am confident that I can contribute effectively to your team.
+
+        {user_input}
+
+        My skills and experiences align perfectly with the requirements of this role. 
+        I look forward to the opportunity to discuss how I can bring value to {company}.
+
+        Thank you for considering my application.
+
+        {closing},
+        [Your Name]
+        """
+        return cover_letter_template
+
+
+def save_cover_letter_as_docx(
+    cover_letter: str,
+    filename: str = "cover_letter.docx",
+    font_name: str = "Times New Roman",
+    font_size: int = 12,
+    alignment: str = "left",
+):
+    """
+    Save the generated cover letter as a .docx file with customizable formatting.
+    """
+    try:
+        doc = Document()
+        paragraph = doc.add_paragraph(cover_letter)
+
+        # Set font style and size
+        for run in paragraph.runs:
+            run.font.name = font_name
+            run.font.size = Pt(font_size)
+
+        # Set alignment
+        alignment_mapping = {
+            "left": WD_PARAGRAPH_ALIGNMENT.LEFT,
+            "center": WD_PARAGRAPH_ALIGNMENT.CENTER,
+            "right": WD_PARAGRAPH_ALIGNMENT.RIGHT,
+        }
+        paragraph.alignment = alignment_mapping.get(alignment.lower(), WD_PARAGRAPH_ALIGNMENT.LEFT)
+
+        doc.save(filename)
+    except Exception as e:
+        st.error(f"Error saving cover letter as .docx: {e}")
+
+
+def authenticate_google_drive():
+    """
+    Authenticate with Google Drive and return the service object.
+    """
+    SCOPES = ['https://www.googleapis.com/auth/drive.file']
+    flow = InstalledAppFlow.from_client_secrets_file('credentials.json', SCOPES)
+    creds = flow.run_local_server(port=0)
+    return build('drive', 'v3', credentials=creds)
+
+
+def upload_to_google_drive(file_path: str, file_name: str):
+    """
+    Upload a file to Google Drive.
+    """
+    try:
+        service = authenticate_google_drive()
+        file_metadata = {'name': file_name}
+        media = MediaFileUpload(file_path, mimetype='application/vnd.openxmlformats-officedocument.wordprocessingml.document')
+        file = service.files().create(body=file_metadata, media_body=media, fields='id').execute()
+        st.success(f"File uploaded to Google Drive. File ID: {file.get('id')}")
+    except Exception as e:
+        st.error(f"Error uploading file to Google Drive: {e}")
+
+
+def upload_to_dropbox(file_path: str, access_token: str, dropbox_path: str):
+    """
+    Upload a file to Dropbox.
+    """
+    try:
+        dbx = dropbox.Dropbox(access_token)
+        with open(file_path, "rb") as f:
+            dbx.files_upload(f.read(), dropbox_path, mode=dropbox.files.WriteMode("overwrite"))
+        st.success(f"File uploaded to Dropbox at {dropbox_path}")
+    except Exception as e:
+        st.error(f"Error uploading file to Dropbox: {e}")
+
+
+def bulk_generate_cover_letters(
+    resumes: list,
+    job_descriptions: list,
+    user_inputs: list,
+    use_gpt: bool,
+):
+    """
+    Generate multiple cover letters in one session for bulk applications.
+    """
+    cover_letters = []
+    for resume, job_desc, user_input in zip(resumes, job_descriptions, user_inputs):
+        cover_letters.append(generate_cover_letter(resume, job_desc, user_input, use_gpt))
+    return cover_letters
+
+
+def streamlit_app():
+    st.title("📄 Cover Letter Generator")
+
+    # Input Fields
+    resume = st.text_area("Paste your resume:", height=200)
+    job_title = st.text_input("Job Title (required):")
+    company = st.text_input("Company (required):")
+    job_description = st.text_area("Job Description:", height=150)
+    user_input = st.text_area("Custom input:", height=100)
+    use_gpt = st.radio("Use GPT for generation?", ["Yes", "No"]) == "Yes"
+
+    if st.button("Generate Cover Letter"):
+        if not job_title or not company:
+            st.error("Both Job Title and Company are required.")
+        else:
+            job_details = {"title": job_title, "company": company, "description": job_description}
+            cover_letter = generate_cover_letter(resume, job_details, user_input, use_gpt=use_gpt)
+
+            st.text_area("Generated Cover Letter", value=cover_letter, height=300)
+
+            # Formatting Options
+            st.subheader("💾 Save Cover Letter")
+            font_name = st.text_input("Font name (default: Times New Roman):", value="Times New Roman")
+            font_size = st.number_input("Font size (default: 12):", value=12, min_value=8, max_value=36)
+            alignment = st.radio("Alignment:", ["left", "center", "right"], index=0)
+
+            # Save as .docx
+            if st.button("Save as .docx"):
+                save_cover_letter_as_docx(cover_letter, "cover_letter.docx", font_name, font_size, alignment)
+                st.success("Cover letter saved as 'cover_letter.docx'.")
+
+            # Google Drive Upload
+            if st.button("Upload to Google Drive"):
+                upload_to_google_drive("cover_letter.docx", "Cover_Letter.docx")
+
+            # Dropbox Upload
+            dropbox_access_token = st.text_input("Enter Dropbox Access Token:")
+            if st.button("Upload to Dropbox"):
+                if not dropbox_access_token:
+                    st.error("Dropbox Access Token is required.")
+                else:
+                    upload_to_dropbox("cover_letter.docx", dropbox_access_token, "/Cover_Letter.docx")
+
+
+if __name__ == "__main__":
+    streamlit_app()
+
 
 
     
