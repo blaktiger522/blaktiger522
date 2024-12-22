@@ -390,3 +390,86 @@ if __name__ == "__main__":
 
 if __name__ == "__main__":
     main()
+
+visa sponsorship finder:
+
+import streamlit as st
+import pandas as pd
+import requests
+from bs4 import BeautifulSoup
+import spacy
+from fpdf import FPDF
+import io
+
+# Load the spaCy NLP model
+nlp = spacy.load("en_core_web_sm")
+
+# SECTION 1: Scraping Visa Sponsorship Data
+def scrape_sponsorship_data(company_name):
+    url = f"https://h1bdata.info/index.php?em={company_name.replace(' ', '+')}&job=&city="
+    response = requests.get(url)
+    soup = BeautifulSoup(response.content, "html.parser")
+    
+    data = []
+    for row in soup.find_all("tr")[1:]:
+        columns = row.find_all("td")
+        if columns:
+            data.append({
+                "Year": columns[0].text.strip(),
+                "Company": columns[1].text.strip(),
+                "Job Title": columns[2].text.strip(),
+                "Location": columns[3].text.strip(),
+                "Salary": columns[4].text.strip(),
+            })
+    return pd.DataFrame(data)
+
+# SECTION 2: Analyze Job Description for Visa Sponsorship
+def analyze_job_description(description):
+    doc = nlp(description)
+    if "visa sponsorship" in description.lower():
+        return True
+    return False
+
+# SECTION 3: Scrape Job Postings
+def scrape_job_postings(company_name):
+    url = f"https://example-job-posting-site.com/{company_name.replace(' ', '-')}"
+    response = requests.get(url)
+    soup = BeautifulSoup(response.content, "html.parser")
+    
+    postings = []
+    for post in soup.find_all("div", class_="job-posting"):
+        title = post.find("h2").text.strip()
+        description = post.find("p", class_="description").text.strip()
+        location = post.find("span", class_="location").text.strip()
+        visa_sponsorship = analyze_job_description(description)
+        postings.append({
+            "title": title,
+            "description": description,
+            "location": location,
+            "visa_sponsorship": visa_sponsorship,
+        })
+    return pd.DataFrame(postings)
+
+# SECTION 4: Filter Job Postings
+def filter_job_postings(jobs, location=None, visa_sponsorship=None):
+    filtered_jobs = jobs.copy()
+    if location:
+        filtered_jobs = filtered_jobs[filtered_jobs["location"].str.contains(location, case=False)]
+    if visa_sponsorship is not None:
+        filtered_jobs = filtered_jobs[filtered_jobs["visa_sponsorship"] == visa_sponsorship]
+    return filtered_jobs
+
+# SECTION 5: Generate PDF Report
+def generate_pdf_report(data):
+    pdf = FPDF()
+    pdf.add_page()
+    pdf.set_font("Arial", size=12)
+    pdf.cell(200, 10, txt="Job Postings Report", ln=True, align='C')
+    pdf.ln(10)
+    
+    for index, row in data.iterrows():
+        pdf.cell(0, 10, txt=f"Title: {row['title']}", ln=True)
+        pdf.cell(0, 10, txt=f"Location: {row['location']}", ln=True)
+        pdf.cell(0, 10, txt=f"Visa Sponsorship: {'Yes' if row['visa_sponsorship'] else 'No'}", ln=True)
+        pdf.cell(0, 10, txt=f"Description: {row['description'][:50]}...", ln=True)
+        pdf.ln(5)
