@@ -473,3 +473,209 @@ def generate_pdf_report(data):
         pdf.cell(0, 10, txt=f"Visa Sponsorship: {'Yes' if row['visa_sponsorship'] else 'No'}", ln=True)
         pdf.cell(0, 10, txt=f"Description: {row['description'][:50]}...", ln=True)
         pdf.ln(5)
+
+chances calculator: 
+import openai
+import streamlit as st
+from io import BytesIO
+from docx import Document
+from docx.shared import Pt
+from docx.enum.text import WD_PARAGRAPH_ALIGNMENT
+from googleapiclient.discovery import build
+from googleapiclient.http import MediaFileUpload
+from google_auth_oauthlib.flow import InstalledAppFlow
+import dropbox
+import json
+import os
+import re
+
+
+# OpenAI API Key (Replace with your key)
+openai.api_key = "your_openai_api_key"
+
+
+# Calculate Job Acceptance Chances
+def calculate_chances(resume: str, job_description: str, keywords: list) -> int:
+    
+    Calculate the chances of job acceptance based on resume and job description matching:
+
+     resume = resume.lower()
+    job_description = job_description.lower()
+
+    Args:
+        resume (str): The user's resume content.
+        job_description (str): The job description text.
+        keywords (list): List of important skills/keywords.
+
+    Returns:
+        int: A percentage value representing the chances of acceptance.
+    """
+    # Normalize text
+    resume = resume.lower()
+    job_description = job_description.lower()
+
+    # Match keywords in resume and job description
+    matched_keywords = [keyword for keyword in keywords if keyword.lower() in resume]
+    total_keywords = len(keywords)
+    keyword_match_percentage = (len(matched_keywords) / total_keywords) * 100 if total_keywords > 0 else 0
+
+    # Match relevant job title or experience in resume
+    title_matches = len(re.findall(r'\b' + re.escape(job_description) + r'\b', resume))
+    title_match_percentage = 50 if title_matches > 0 else 0
+
+    # Final percentage: weighted average of matches
+    final_percentage = (keyword_match_percentage * 0.7) + (title_match_percentage * 0.3)
+    return int(final_percentage)
+
+
+def get_chances_label(percentage: int) -> tuple:
+    """
+    Get the label and color for the chances percentage.
+    
+    Args:
+        percentage (int): The percentage value of acceptance chances.
+
+    Returns:
+        tuple: A tuple containing the label and color.
+    """
+    if percentage > 70:
+        return "High Chances", "green"
+    elif 40 <= percentage <= 70:
+        return "Average Chances", "yellow"
+    else:
+        return "Low Chances", "red"
+
+
+
+import openai
+import streamlit as st
+import pandas as pd
+import json
+import os
+from fpdf import FPDF
+from datetime import datetime, timedelta
+import requests
+
+
+# OpenAI API Key (Replace with your key)
+openai.api_key = os.getenv("OPENAI_API_KEY", "your_openai_api_key")
+
+
+# SECTION 1: Error Handling Utilities
+def handle_api_error(response):
+    """Handle API errors gracefully."""
+    if response.status_code != 200:
+        st.error(f"API call failed with status code {response.status_code}: {response.text}")
+        return None
+    return response.json()
+
+
+def validate_inputs(inputs: dict):
+    """Validate required user inputs."""
+    for key, value in inputs.items():
+        if not value.strip():
+            st.error(f"{key} is required.")
+            return False
+    return True
+
+
+# SECTION 2: Generate Cover Letter with Tone/Style Options
+def generate_cover_letter(resume: str, job: dict, tone: str, user_input: str = ""):
+    """
+    Generate a personalized cover letter with the specified tone.
+    """
+    title = job.get("title", "the position")
+    company = job.get("company", "your company")
+
+    tone_prompts = {
+        "formal": "Write a formal and professional cover letter.",
+        "enthusiastic": "Write an enthusiastic and engaging cover letter.",
+        "concise": "Write a concise and impactful cover letter.",
+    }
+
+    prompt = f"""
+    {tone_prompts.get(tone, "Write a professional cover letter.")}
+    Position: {title} at {company}.
+    Candidate's resume: {resume[:300]}
+User's additional input: {user_input}.
+    """
+    try:
+        response = openai.Completion.create(
+            engine="text-davinci-003",
+            prompt=prompt,
+            max_tokens=300,
+            temperature=0.7,
+        )
+        return response['choices'][0]['text'].strip()
+    except Exception as e:
+        return f"Error generating cover letter: {e}"
+
+# SECTION 3: Export Functionality
+def export_to_csv(data: pd.DataFrame, file_name: str):
+    """Export data to a CSV file."""
+    data.to_csv(file_name, index=False)
+    st.success(f"Data exported to {file_name}!")
+
+def export_to_pdf(content: str, file_name: str):
+    """Export content to a PDF file."""
+    pdf = FPDF()
+    pdf.add_page()
+    pdf.set_font("Arial", size=12)
+    pdf.multi_cell(0, 10, content)
+    pdf.output(file_name)
+    st.success(f"File exported as {file_name}")
+
+# SECTION 4: Streamlit App
+def streamlit_app():
+    st.title("📄 Cover Letter Generator & Job Results Exporter")
+
+ # Step 1: CV Scanner
+    st.header("Step 1: Scan Your CV for Improvements")
+    cv_text = st.text_area("Paste your CV text:", height=200)
+    if st.button("Analyze CV"):
+        if not cv_text.strip():
+            st.error("Please paste your CV text for analysis.")
+        else:
+            suggestions = scan_cv(cv_text)
+            st.subheader("Suggestions for Improvement:")
+            st.write(suggestions)
+
+            # Export CV analysis to PDF
+            if st.button("Export CV Suggestions to PDF"):
+                export_to_pdf(suggestions, "cv_suggestions.pdf")
+
+    # Step 2: Generate Cover Letter
+    st.header("Step 2: Generate a Cover Letter")
+    resume = st.text_area("Paste your resume:", height=200)
+    job_title = st.text_input("Job Title:")
+    company = st.text_input("Company Name:")
+    user_input = st.text_area("Additional Details (optional):", height=100)
+    tone = st.radio("Choose a tone for your cover letter:", ["formal", "enthusiastic", "concise"])
+
+    if st.button("Generate Cover Letter"):
+        if not validate_inputs({"Resume": resume, "Job Title": job_title, "Company Name": company}):
+            return
+        job = {"title": job_title, "company": company}
+        cover_letter = generate_cover_letter(resume, job, tone, user_input)
+        st.subheader("Generated Cover Letter:")
+        st.text_area("", value=cover_letter, height=300)
+
+        # Export Cover Letter
+        if st.button("Export Cover Letter to PDF"):
+            export_to_pdf(cover_letter, "cover_letter.pdf")
+
+    # Step 3: Export Job Results
+    st.header("Step 3: Export Job Results")
+    st.write("Simulated Job Results:")
+    example_jobs = pd.DataFrame([
+        {"Title": "Software Engineer", "Company": "TechCorp", "Location": "Remote", "Chances": "High"},
+        {"Title": "Data Scientist", "Company": "DataCorp", "Location": "New York", "Chances": "Average"},
+    ])
+    st.dataframe(example_jobs)
+
+    if st.button("Export Job Results to CSV"):
+        export_to_csv(example_jobs, "job_results.csv")
+
+# Run the App
+if __name__ == "__main__":
+    streamlit_app()
